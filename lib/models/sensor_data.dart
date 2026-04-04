@@ -1,42 +1,112 @@
-class SensorData {
+import 'dart:math';
+class DevData {
+  // ── Capteurs ──────────────────────────────────────────────────
   final double temperature;
-  final double humidity;
-  final bool   motion;
-  final double waterLevel;
+  final double humidite;
+  final double niveauEau;
 
-  // États actionneurs (lus depuis Ubidots)
+  // ── Actionneurs ───────────────────────────────────────────────
   final bool fanOn;
-  final bool pumpOn;
   final bool heaterOn;
-  final bool buzzerOn;
+  final bool pumpOn;
 
-  SensorData({
+  // ── Alertes Ubidots ───────────────────────────────────────────
+  final bool alerteChaud;    // alerte_chaud
+  final bool alerteNiveau;   // alerte_niveau
+
+  // ── Switches de demande manuelle ─────────────────────────────
+  final bool switchRequete;    // switch_requete   → demande niveau eau
+  final bool switchRequeteTh;  // switch_requete_th → demande temp + humidité
+
+  // ── État connexion ────────────────────────────────────────────
+  final bool connected;
+
+  const DevData({
     required this.temperature,
-    required this.humidity,
-    required this.motion,
-    required this.waterLevel,
-    this.fanOn    = false,
-    this.pumpOn   = false,
-    this.heaterOn = false,
-    this.buzzerOn = false,
+    required this.humidite,
+    required this.niveauEau,
+    this.fanOn         = false,
+    this.heaterOn      = false,
+    this.pumpOn        = false,
+    this.alerteChaud   = false,
+    this.alerteNiveau  = false,
+    this.switchRequete   = false,
+    this.switchRequeteTh = false,
+    this.connected     = false,
   });
 
-  factory SensorData.fake() {
-    final now   = DateTime.now();
-    final temp  = 22.0 + (now.second % 10).toDouble();
-    final water = 30.0 + (now.second % 50).toDouble();
-    final hum   = 45.0 + (now.second % 25).toDouble();
-    final motion = now.second % 6 < 3;
+  factory DevData.zero() => const DevData(
+    temperature: 0, humidite: 0, niveauEau: 0,
+  );
 
-    return SensorData(
-      temperature: temp,
-      humidity:    hum,
-      motion:      motion,
-      waterLevel:  water,
-      fanOn:       temp > 35,
-      heaterOn:    temp < 15,
-      pumpOn:      water < 20,
-      buzzerOn:    motion,
-    );
+  
+}
+
+class CamData {
+  // ── Capteur ───────────────────────────────────────────────────
+  final bool mouvement;   // mouvement
+
+  // ── Contrôle ─────────────────────────────────────────────────
+  final bool stopAlarme;    // stop_alarme
+  final bool demandePhoto;  // demande_photo
+
+  // ── Photo ─────────────────────────────────────────────────────
+  final String? lastPhotoUrl;
+
+  // ── État connexion ────────────────────────────────────────────
+  final bool connected;
+
+  const CamData({
+    required this.mouvement,
+    this.stopAlarme   = false,
+    this.demandePhoto = false,
+    this.lastPhotoUrl,
+    this.connected    = false,
+  });
+
+  factory CamData.zero() => const CamData(mouvement: false);
+
+  
+}
+
+/// Message d'alerte unifié
+class AlertMessage {
+  final String message;
+  final DateTime timestamp;
+  final String type;
+  final String device;
+
+  AlertMessage({
+    required this.message,
+    required this.timestamp,
+    required this.type,
+    required this.device,
+  });
+
+  String get icon {
+    switch (type) {
+      case 'temp_hot':   return '🌡️';
+      case 'temp_cold':  return '🥶';
+      case 'humidity':   return '💧';
+      case 'water':      return '🪣';
+      case 'mouvement':  return '🚨';
+      default:
+        if (type.endsWith('_resolved')) return '✅';
+        return '⚠️';
+    }
+  }
+
+  String get timeAgo {
+    final diff = DateTime.now().difference(timestamp);
+    if (diff.inSeconds < 60)  return 'il y a ${diff.inSeconds}s';
+    if (diff.inMinutes < 60)  return 'il y a ${diff.inMinutes}min';
+    if (diff.inHours < 24)    return 'il y a ${diff.inHours}h';
+    return 'il y a ${diff.inDays}j';
+  }
+
+  String get formattedTime {
+    return '${timestamp.hour.toString().padLeft(2,'0')}:'
+        '${timestamp.minute.toString().padLeft(2,'0')}:'
+        '${timestamp.second.toString().padLeft(2,'0')}';
   }
 }

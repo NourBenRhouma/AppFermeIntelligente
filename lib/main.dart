@@ -1,6 +1,5 @@
 import 'package:flutter/material.dart';
-import 'package:smart_farm/Intro_page.dart';
-import 'intro_page.dart' hide IntroPage;
+import 'intro_page.dart';
 
 void main() {
   runApp(const SmartFarmApp());
@@ -12,7 +11,7 @@ class SmartFarmApp extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
-      title: 'Smart Farm',
+      title: 'Smart Farm IoT',
       debugShowCheckedModeBanner: false,
       theme: ThemeData(
         colorScheme: ColorScheme.fromSeed(
