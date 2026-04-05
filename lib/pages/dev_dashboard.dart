@@ -208,10 +208,10 @@ class _DevDashboardState extends State<DevDashboard>
           decoration: BoxDecoration(
             color: _green.withOpacity(0.12), borderRadius: BorderRadius.circular(11),
           ),
-          child: const Center(child: Text('🌿', style: TextStyle(fontSize: 16))),
+          child: const Center(child: Text('🚜', style: TextStyle(fontSize: 16))),
         ),
         const SizedBox(width: 10),
-        const Text('Serre',
+        const Text('Ferme',
             style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _text, letterSpacing: -0.4)),
         if (_isLoading) ...[
           const SizedBox(width: 10),

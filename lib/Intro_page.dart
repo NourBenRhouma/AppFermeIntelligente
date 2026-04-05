@@ -107,6 +107,7 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
             ),
             SafeArea(
               child: SingleChildScrollView(
+                physics: const BouncingScrollPhysics(),
                 padding: const EdgeInsets.fromLTRB(24, 28, 24, 32),
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
@@ -142,16 +143,24 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
     return AnimatedBuilder(
       animation: _pulseAnim,
       builder: (_, __) => Container(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
+        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 7),
         decoration: BoxDecoration(
-          color: const Color(0xFF1A3D2B),
-          borderRadius: BorderRadius.circular(20),
-          border: Border.all(color: _green.withOpacity(0.25)),
+          gradient: LinearGradient(
+            colors: [const Color(0xFF1A3D2B), const Color(0xFF0D1F15)],
+          ),
+          borderRadius: BorderRadius.circular(30),
+          border: Border.all(color: _green.withOpacity(0.3)),
+          boxShadow: [
+            BoxShadow(
+              color: _green.withOpacity(0.1),
+              blurRadius: 10,
+            ),
+          ],
         ),
         child: Row(mainAxisSize: MainAxisSize.min, children: [
           AnimatedContainer(
             duration: const Duration(milliseconds: 300),
-            width: 6, height: 6,
+            width: 7, height: 7,
             decoration: BoxDecoration(
               shape: BoxShape.circle,
               color: _green,
@@ -161,7 +170,7 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
               )],
             ),
           ),
-          const SizedBox(width: 6),
+          const SizedBox(width: 8),
           Text(
             '2 appareils connectés',
             style: TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w700),
@@ -179,7 +188,7 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
         RichText(
           text: TextSpan(
             style: const TextStyle(
-              fontSize: 34, fontWeight: FontWeight.w800,
+              fontSize: 36, fontWeight: FontWeight.w800,
               height: 1.1, letterSpacing: -1.2, color: _text,
             ),
             children: [
@@ -189,10 +198,18 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
             ],
           ),
         ),
-        const SizedBox(height: 14),
-        Text(
-          'Surveillez et contrôlez votre serre intelligente en temps réel depuis votre téléphone.',
-          style: TextStyle(color: _text2, fontSize: 13, height: 1.6),
+        const SizedBox(height: 16),
+        Container(
+          padding: const EdgeInsets.all(14),
+          decoration: BoxDecoration(
+            color: _surface2.withOpacity(0.5),
+            borderRadius: BorderRadius.circular(18),
+            border: Border.all(color: Colors.white.withOpacity(0.05)),
+          ),
+          child: Text(
+            'Surveillez et contrôlez votre ferme intelligente en temps réel depuis votre téléphone.',
+            style: TextStyle(color: _text2, fontSize: 13, height: 1.5),
+          ),
         ),
       ]),
     );
@@ -206,10 +223,10 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
         opacity: _cardsFade,
         child: Row(children: [
           Expanded(child: _deviceCard(
-            emoji: '🌿', label: 'Serre', sub: 'Temp · Eau · Hum', color: _green,
+            emoji: '🚜', label: 'Ferme', sub: 'Temp · Eau · Hum', color: _green,
             gradColor: const Color(0xFF1A3D2B), onTap: _goToDashboard,
           )),
-          const SizedBox(width: 10),
+          const SizedBox(width: 12),
           Expanded(child: _deviceCard(
             emoji: '📷', label: 'Caméra', sub: 'Détection · Photo', color: _amber,
             gradColor: const Color(0xFF3D2A00), onTap: _goToDashboard,
@@ -232,20 +249,27 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
             begin: Alignment.topLeft, end: Alignment.bottomRight,
             colors: [gradColor, _surface],
           ),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: color.withOpacity(0.25)),
+          borderRadius: BorderRadius.circular(22),
+          border: Border.all(color: color.withOpacity(0.3)),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.1),
+              blurRadius: 10,
+              offset: const Offset(0, 4),
+            ),
+          ],
         ),
         child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
           Container(
-            width: 44, height: 44,
+            width: 46, height: 46,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.12), borderRadius: BorderRadius.circular(14),
+              color: color.withOpacity(0.15), borderRadius: BorderRadius.circular(14),
             ),
             child: Center(child: Text(emoji, style: const TextStyle(fontSize: 22))),
           ),
           const SizedBox(height: 12),
-          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w700, fontSize: 13)),
-          const SizedBox(height: 2),
+          Text(label, style: TextStyle(color: color, fontWeight: FontWeight.w800, fontSize: 13)),
+          const SizedBox(height: 4),
           Text(sub, style: const TextStyle(color: _text3, fontSize: 10)),
         ]),
       ),
@@ -266,8 +290,8 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
         opacity: _cardsFade,
         child: GridView.count(
           shrinkWrap: true, physics: const NeverScrollableScrollPhysics(),
-          crossAxisCount: 2, crossAxisSpacing: 8, mainAxisSpacing: 8,
-          childAspectRatio: 2.0,
+          crossAxisCount: 2, crossAxisSpacing: 10, mainAxisSpacing: 10,
+          childAspectRatio: 2.1,
           children: feats.map((f) => _featItem(f)).toList(),
         ),
       ),
@@ -279,23 +303,32 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
       padding: const EdgeInsets.all(12),
       decoration: BoxDecoration(
         color: _surface,
-        borderRadius: BorderRadius.circular(14),
-        border: Border.all(color: Colors.white.withOpacity(0.07)),
+        borderRadius: BorderRadius.circular(18),
+        border: Border.all(color: Colors.white.withOpacity(0.06)),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withOpacity(0.2),
+            blurRadius: 8,
+            offset: const Offset(0, 2),
+          ),
+        ],
       ),
       child: Row(children: [
         Container(
-          width: 30, height: 30,
+          width: 34, height: 34,
           decoration: BoxDecoration(
-            color: f.color.withOpacity(0.12),
-            borderRadius: BorderRadius.circular(9),
+            gradient: LinearGradient(
+              colors: [f.color.withOpacity(0.2), f.color.withOpacity(0.05)],
+            ),
+            borderRadius: BorderRadius.circular(12),
           ),
-          child: Center(child: Text(f.emoji, style: const TextStyle(fontSize: 14))),
+          child: Center(child: Text(f.emoji, style: const TextStyle(fontSize: 15))),
         ),
-        const SizedBox(width: 8),
+        const SizedBox(width: 10),
         Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, mainAxisAlignment: MainAxisAlignment.center, children: [
           Text(f.title, style: const TextStyle(color: _text, fontSize: 11, fontWeight: FontWeight.w700)),
-          const SizedBox(height: 1),
-          Text(f.sub, style: const TextStyle(color: _text3, fontSize: 9.5, height: 1.3)),
+          const SizedBox(height: 2),
+          Text(f.sub, style: const TextStyle(color: _text3, fontSize: 9.5, height: 1.2)),
         ])),
       ]),
     );
@@ -313,8 +346,10 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
             width: double.infinity,
             padding: const EdgeInsets.symmetric(vertical: 17),
             decoration: BoxDecoration(
-              color: _green,
-              borderRadius: BorderRadius.circular(18),
+              gradient: LinearGradient(
+                colors: [_green, _green.withOpacity(0.85)],
+              ),
+              borderRadius: BorderRadius.circular(24),
               boxShadow: [
                 BoxShadow(
                   color: _green.withOpacity(0.20 + 0.12 * _pulseAnim.value),
@@ -324,6 +359,8 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
               ],
             ),
             child: Row(mainAxisAlignment: MainAxisAlignment.center, children: [
+              const Icon(Icons.dashboard_rounded, color: Color(0xFF071a10), size: 18),
+              const SizedBox(width: 8),
               const Text(
                 'Accéder au tableau de bord',
                 style: TextStyle(
@@ -334,7 +371,7 @@ class _IntroPageState extends State<IntroPage> with TickerProviderStateMixin {
                 ),
               ),
               const SizedBox(width: 8),
-              const Text('→', style: TextStyle(color: Color(0xFF071a10), fontSize: 16, fontWeight: FontWeight.w700)),
+              const Icon(Icons.arrow_forward_rounded, color: Color(0xFF071a10), size: 16),
             ]),
           ),
         ),

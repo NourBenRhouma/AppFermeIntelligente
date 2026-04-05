@@ -3,6 +3,7 @@ import 'dev_dashboard.dart';
 import 'cam_dashboard.dart';
 import 'alerts_page.dart';
 import '../services/alert_service.dart';
+import '../intro_page.dart';
 
 // Design tokens from HTML mockup
 const Color _bg      = Color(0xFF0A0B0F);
@@ -41,6 +42,19 @@ class _DashboardPageState extends State<DashboardPage>
   int get _devAlerts   => AlertService.devAlerts.length;
   int get _camAlerts   => AlertService.camAlerts.length;
 
+  void _goBackToIntro() {
+    Navigator.of(context).pushReplacement(
+      PageRouteBuilder(
+        transitionDuration: const Duration(milliseconds: 600),
+        pageBuilder: (_, animation, __) => const IntroPage(),
+        transitionsBuilder: (_, animation, __, child) => FadeTransition(
+          opacity: CurvedAnimation(parent: animation, curve: Curves.easeOut),
+          child: child,
+        ),
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     return Scaffold(
@@ -74,6 +88,25 @@ class _DashboardPageState extends State<DashboardPage>
       padding: const EdgeInsets.fromLTRB(20, 16, 16, 0),
       child: Row(
         children: [
+          // Bouton retour vers IntroPage
+          GestureDetector(
+            onTap: _goBackToIntro,
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: _surface,
+                borderRadius: BorderRadius.circular(11),
+                border: Border.all(color: Colors.white.withOpacity(0.08)),
+              ),
+              child: const Icon(
+                Icons.arrow_back_rounded,
+                color: _text2,
+                size: 18,
+              ),
+            ),
+          ),
+          const SizedBox(width: 10),
           // Icon + title
           Container(
             width: 36, height: 36,
@@ -81,12 +114,12 @@ class _DashboardPageState extends State<DashboardPage>
               color: _green.withOpacity(0.12),
               borderRadius: BorderRadius.circular(11),
             ),
-            child: const Center(child: Text('🌱', style: TextStyle(fontSize: 18))),
+            child: const Center(child: Text('🚜', style: TextStyle(fontSize: 18))),
           ),
           const SizedBox(width: 10),
           Expanded(
             child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-              const Text('Smart Farm',
+              const Text('Ferme Intelligente',
                   style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800,
                       color: _text, letterSpacing: -0.4)),
               Text('2 appareils connectés',
@@ -170,7 +203,7 @@ class _DashboardPageState extends State<DashboardPage>
         unselectedLabelColor: _text3,
         dividerColor: Colors.transparent,
         tabs: [
-          _buildTab(icon: Icons.eco_rounded, label: 'Serre',
+          _buildTab(icon: Icons.eco, label: 'Ferme',
               color: _green, alerts: _devAlerts, isSelected: _tab.index == 0),
           _buildTab(icon: Icons.videocam_rounded, label: 'Caméra',
               color: _amber, alerts: _camAlerts, isSelected: _tab.index == 1),
@@ -219,7 +252,7 @@ class _DashboardPageState extends State<DashboardPage>
         bottom: MediaQuery.of(context).padding.bottom + 8,
       ),
       child: Row(children: [
-        _navItem(emoji: '🌿', label: 'Serre', color: _green, isActive: _tab.index == 0, onTap: () => _tab.animateTo(0)),
+        _navItem(emoji: '🚜', label: 'Ferme', color: _green, isActive: _tab.index == 0, onTap: () => _tab.animateTo(0)),
         _navItem(emoji: '📷', label: 'Caméra', color: _amber, isActive: _tab.index == 1, onTap: () => _tab.animateTo(1)),
         _navItem(
           emoji: '🔔', label: 'Alertes', color: _red,
