@@ -40,8 +40,8 @@ class _DevDashboardState extends State<DevDashboard>
     'fan': false, 'heater': false, 'pump': false,
   };
 
-  static const Duration _periodicInterval = Duration(minutes: 3);
-  int _secondsUntilNext = 180;
+  static const Duration _periodicInterval = Duration(seconds: 2);
+  int _secondsUntilNext = 2;
   Timer? _periodicTimer;
   Timer? _countdown;
 
@@ -354,10 +354,10 @@ class _DevDashboardState extends State<DevDashboard>
           ),
           SensorCard(
             title: 'Réservoir',
-            value: '${_data.niveauEau.toStringAsFixed(0)}%',
+            value: '${100-_data.niveauEau}',
             icon: Icons.water_rounded,
             color: _waterColor,
-            subtitle: _data.niveauEau < 20 ? 'Faible' : _data.niveauEau < 50 ? 'Moyen' : 'Suffisant',
+            subtitle: _data.niveauEau > 20 ? 'Faible' : _data.niveauEau < 15 ? 'Moyen' : 'Suffisant',
           ),
           _buildTimerCard(),
         ],
@@ -433,7 +433,7 @@ class _DevDashboardState extends State<DevDashboard>
         isLoading: _loadingRequeteEau,
         emoji: '🪣',
         title: 'Vérifier le niveau d\'eau',
-        currentVal: '${_data.niveauEau.toStringAsFixed(0)}%',
+        currentVal: '${100- _data.niveauEau}',
         color: _blue,
         onTap: _demandeNiveauEau,
       ),
