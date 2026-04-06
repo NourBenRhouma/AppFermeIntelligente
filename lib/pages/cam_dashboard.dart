@@ -33,10 +33,10 @@ class _CamDashboardState extends State<CamDashboard>
   String _lastUpdate = '';
   bool _alarmeOverrideOff = false;
 
-  static const Duration _periodicInterval = Duration(seconds: 4);
-  int _secondsUntilNext = 180;
-  Timer? _timer;
-  Timer? _countdown;
+  // Polling 2 secondes comme DevDashboard
+  static const Duration _pollInterval = Duration(seconds: 2);
+  Timer? _pollTimer;
+  bool _isFetching = false;
 
   late AnimationController _pulseCtrl;
   late AnimationController _fadeCtrl;
@@ -60,37 +60,91 @@ class _CamDashboardState extends State<CamDashboard>
     _fadeAnim = CurvedAnimation(parent: _fadeCtrl, curve: Curves.easeOut);
     _motionAnim = CurvedAnimation(parent: _motionCtrl, curve: Curves.easeInOut);
     _fadeCtrl.forward();
-    _startPeriodicMode();
+    _startPolling();
   }
 
   @override
   void dispose() {
-    _timer?.cancel();
-    _countdown?.cancel();
+    _pollTimer?.cancel();
     _pulseCtrl.dispose();
     _fadeCtrl.dispose();
     _motionCtrl.dispose();
     super.dispose();
   }
 
-  void _startPeriodicMode() {
-    _timer?.cancel();
-    _countdown?.cancel();
-    _timer = Timer.periodic(
-        _periodicInterval, (_) => _executeAcquisition(withPhoto: false));
-    _startCountdown();
-    _executeAcquisition(withPhoto: false);
+  // ── Démarrage du polling ──────────────────────────────────────
+  void _startPolling() {
+    _pollTimer?.cancel();
+    _runPolling();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _runPolling());
   }
 
-  void _startCountdown() {
-    _countdown?.cancel();
-    setState(() => _secondsUntilNext = _periodicInterval.inSeconds);
-    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() => _secondsUntilNext > 0
-          ? _secondsUntilNext--
-          : _secondsUntilNext = _periodicInterval.inSeconds);
-    });
+  // ── Fetch + détection de changement ──────────────────────────
+ Future<void> _runPolling() async {
+  if (!mounted || _isFetching) return;
+  _isFetching = true;
+
+  if (_lastUpdate.isEmpty && mounted) {
+    setState(() => _isLoading = true);
+  }
+
+  try {
+    // 🔥 CORRECTION : Lire d'abord les données sans photo
+    final raw = await UbidotsService.fetchCamData(withPhoto: false);
+    
+    // 🔥 Si mouvement détecté, on rappelle pour avoir la photo
+    CamData finalRaw = raw;
+    if (raw.mouvement && _savedPhotoUrl == null) {
+      print('📸 Mouvement détecté, récupération de la photo...');
+      finalRaw = await UbidotsService.fetchCamData(withPhoto: true);
+    }
+
+    // Détection de changement
+    final changed = finalRaw.mouvement != _data.mouvement ||
+        finalRaw.stopAlarme != _data.stopAlarme ||
+        finalRaw.connected != _data.connected;
+
+    // Reset override si plus de mouvement
+    if (!finalRaw.mouvement) _alarmeOverrideOff = false;
+
+    final data = await UbidotsService.applyAlertsAndSendCam(
+      raw: finalRaw,
+      alarmeOverrideOff: _alarmeOverrideOff,
+    );
+    await AlertService.checkCam(data);
+
+    // Sauvegarder la photo si elle existe
+    if (finalRaw.lastPhotoUrl != null) {
+      _savedPhotoUrl = finalRaw.lastPhotoUrl;
+    }
+
+    final finalData = CamData(
+      mouvement: data.mouvement,
+      stopAlarme: data.stopAlarme,
+      demandePhoto: data.demandePhoto,
+      lastPhotoUrl: _savedPhotoUrl,
+      connected: data.connected,
+    );
+
+    if (mounted && (changed || _lastUpdate.isEmpty)) {
+      setState(() {
+        _data = finalData;
+        _lastUpdate = _now();
+        _isLoading = false;
+      });
+    }
+  } catch (e) {
+    print('_runPolling erreur: $e');
+    if (mounted) setState(() => _isLoading = false);
+  } finally {
+    _isFetching = false;
+  }
+}
+
+  // ── Refresh manuel ────────────────────────────────────────────
+  Future<void> _manualRefresh() async {
+    if (_isFetching) return;
+    await _runPolling();
   }
 
   Future<void> _demandePhoto() async {
@@ -99,29 +153,33 @@ class _CamDashboardState extends State<CamDashboard>
     try {
       await UbidotsService.sendDemandePhoto();
 
-      //  15 secondes pour laisser ESP32 capturer + upload + envoyer
+      // 15 secondes pour laisser ESP32 capturer + upload + envoyer
       await Future.delayed(const Duration(seconds: 15));
 
       final raw = await UbidotsService.fetchCamData(withPhoto: true);
+      
+      // Reset override si plus de mouvement
+      if (!raw.mouvement) _alarmeOverrideOff = false;
+      
       final data = await UbidotsService.applyAlertsAndSendCam(
         raw: raw,
         alarmeOverrideOff: _alarmeOverrideOff,
       );
       await AlertService.checkCam(data);
 
-      if (mounted)
+      if (mounted) {
         setState(() {
-          //  Sauvegarder la nouvelle URL
           _savedPhotoUrl = raw.lastPhotoUrl ?? _savedPhotoUrl;
           _data = CamData(
             mouvement: data.mouvement,
             stopAlarme: data.stopAlarme,
             demandePhoto: data.demandePhoto,
-            lastPhotoUrl: _savedPhotoUrl, //  URL persistante
+            lastPhotoUrl: _savedPhotoUrl,
             connected: data.connected,
           );
           _lastUpdate = _now();
         });
+      }
     } catch (e) {
       print('_demandePhoto erreur: $e');
     } finally {
@@ -134,55 +192,15 @@ class _CamDashboardState extends State<CamDashboard>
     setState(() => _loadingStop = true);
     try {
       _alarmeOverrideOff = true;
-      await _executeAcquisition(withPhoto: false);
-    } catch (_) {
+      await _runPolling();
     } finally {
       if (mounted) setState(() => _loadingStop = false);
     }
   }
 
-  Future<void> _executeAcquisition({required bool withPhoto}) async {
-    if (mounted) setState(() => _isLoading = true);
-    try {
-      final raw = await UbidotsService.fetchCamData(withPhoto: withPhoto);
-      if (!raw.mouvement) _alarmeOverrideOff = false;
-
-      // ✅ Si mouvement détecté → lire aussi la photo automatiquement
-      CamData rawWithPhoto = raw;
-      if (raw.mouvement && !withPhoto) {
-        // Attendre que l'ESP32 finisse l'upload
-        await Future.delayed(const Duration(seconds: 10));
-        rawWithPhoto = await UbidotsService.fetchCamData(withPhoto: true);
-      }
-
-      final data = await UbidotsService.applyAlertsAndSendCam(
-        raw: rawWithPhoto,
-        alarmeOverrideOff: _alarmeOverrideOff,
-      );
-      await AlertService.checkCam(data);
-
-      if (mounted)
-        setState(() {
-          _savedPhotoUrl = rawWithPhoto.lastPhotoUrl ?? _savedPhotoUrl;
-          _data = CamData(
-            mouvement: data.mouvement,
-            stopAlarme: data.stopAlarme,
-            demandePhoto: data.demandePhoto,
-            lastPhotoUrl: _savedPhotoUrl, // ✅ URL persistante
-            connected: data.connected,
-          );
-          _lastUpdate = _now();
-        });
-    } catch (e) {
-      print('_executeAcquisition erreur: $e');
-    } finally {
-      if (mounted) setState(() => _isLoading = false);
-    }
-  }
-
   String _now() {
     final n = DateTime.now();
-    return '${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}';
+    return '${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}:${n.second.toString().padLeft(2, '0')}';
   }
 
   int get _alertCount => AlertService.camAlerts.length;
@@ -194,7 +212,7 @@ class _CamDashboardState extends State<CamDashboard>
     return FadeTransition(
       opacity: _fadeAnim,
       child: RefreshIndicator(
-        onRefresh: () => _executeAcquisition(withPhoto: false),
+        onRefresh: _manualRefresh,
         color: _amber,
         backgroundColor: _surface,
         child: CustomScrollView(slivers: [
@@ -216,7 +234,7 @@ class _CamDashboardState extends State<CamDashboard>
                       _buildAlarmSection(),
                     ],
                     const SizedBox(height: 20),
-                    _buildAutoRefreshCard(),
+                    _buildLiveCard(),
                   ]),
             ),
           ),
@@ -225,7 +243,7 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // .dash-header appbar
+  // AppBar
   Widget _buildAppBar() {
     return SliverAppBar(
       pinned: true,
@@ -274,8 +292,7 @@ class _CamDashboardState extends State<CamDashboard>
           child: IconButton(
             padding: EdgeInsets.zero,
             icon: Text('↻', style: TextStyle(color: _text2, fontSize: 16)),
-            onPressed:
-                _isLoading ? null : () => _executeAcquisition(withPhoto: false),
+            onPressed: _isLoading ? null : _manualRefresh,
           ),
         ),
       ],
@@ -331,7 +348,7 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // .update-row
+  // Update row
   Widget _buildUpdateRow() {
     return Row(children: [
       AnimatedBuilder(
@@ -366,7 +383,6 @@ class _CamDashboardState extends State<CamDashboard>
                   MaterialPageRoute(builder: (_) => const AlertsPage()))
               .then((_) => setState(() {})),
           child: Container(
-            // .alert-pill amber style
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: _amber.withOpacity(0.10),
@@ -383,13 +399,12 @@ class _CamDashboardState extends State<CamDashboard>
     ]);
   }
 
-  // .section-title + .motion-card
+  // Detection section
   Widget _buildDetectionSection() {
     final detected = _data.mouvement;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Détection'),
       const SizedBox(height: 10),
-      // .motion-card
       AnimatedContainer(
         duration: const Duration(milliseconds: 400),
         padding: const EdgeInsets.all(20),
@@ -408,7 +423,6 @@ class _CamDashboardState extends State<CamDashboard>
           ),
         ),
         child: Row(children: [
-          // .motion-icon
           AnimatedBuilder(
             animation: detected ? _motionAnim : _pulseAnim,
             builder: (_, __) {
@@ -457,7 +471,6 @@ class _CamDashboardState extends State<CamDashboard>
                 ),
                 if (detected) ...[
                   const SizedBox(height: 8),
-                  // .alarm-pill
                   Container(
                     padding:
                         const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
@@ -499,7 +512,7 @@ class _CamDashboardState extends State<CamDashboard>
     ]);
   }
 
-  // .section-title + .photo-card
+  // Photo section
   Widget _buildPhotoSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Photo'),
@@ -511,14 +524,12 @@ class _CamDashboardState extends State<CamDashboard>
           border: Border.all(color: Colors.white.withOpacity(0.07)),
         ),
         child: Column(children: [
-          // .photo-placeholder / photo area
           ClipRRect(
             borderRadius: const BorderRadius.vertical(top: Radius.circular(20)),
             child: _data.lastPhotoUrl != null
                 ? Image.network(
                     _data.lastPhotoUrl!,
-                    key: ValueKey(
-                        _data.lastPhotoUrl), // ✅ force rebuild si URL change
+                    key: ValueKey(_data.lastPhotoUrl),
                     height: 160,
                     width: double.infinity,
                     fit: BoxFit.cover,
@@ -539,13 +550,12 @@ class _CamDashboardState extends State<CamDashboard>
                       );
                     },
                     errorBuilder: (context, error, stackTrace) {
-                      print('❌ Image erreur: $error'); // ✅ voir l'erreur exacte
+                      print('❌ Image erreur: $error');
                       return _photoPlaceholder();
                     },
                   )
                 : _photoPlaceholder(),
           ),
-          // .photo-btn
           Padding(
             padding: const EdgeInsets.all(12),
             child: GestureDetector(
@@ -602,7 +612,7 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // .alarm-card section
+  // Alarm section
   Widget _buildAlarmSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Alarme'),
@@ -615,7 +625,6 @@ class _CamDashboardState extends State<CamDashboard>
           border: Border.all(color: _red.withOpacity(0.28), width: 1.5),
         ),
         child: Column(children: [
-          // .alarm-header
           Row(children: [
             Container(
               width: 40,
@@ -643,7 +652,6 @@ class _CamDashboardState extends State<CamDashboard>
                 ])),
           ]),
           const SizedBox(height: 14),
-          // .alarm-stop-btn
           GestureDetector(
             onTap: _loadingStop ? null : _stopAlarme,
             child: Container(
@@ -677,10 +685,8 @@ class _CamDashboardState extends State<CamDashboard>
     ]);
   }
 
-  // .refresh-card
-  Widget _buildAutoRefreshCard() {
-    final mins = _secondsUntilNext ~/ 60;
-    final secs = _secondsUntilNext % 60;
+  // Live card (remplace auto-refresh card)
+  Widget _buildLiveCard() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
@@ -689,21 +695,40 @@ class _CamDashboardState extends State<CamDashboard>
         border: Border.all(color: Colors.white.withOpacity(0.07)),
       ),
       child: Row(children: [
-        const Text('⏱️', style: TextStyle(fontSize: 14)),
+        AnimatedBuilder(
+          animation: _pulseAnim,
+          builder: (_, __) => Container(
+            width: 7,
+            height: 7,
+            decoration: BoxDecoration(
+              color: _connected ? _green : _red,
+              shape: BoxShape.circle,
+              boxShadow: _connected
+                  ? [
+                      BoxShadow(
+                        color: _green.withOpacity(0.5 * _pulseAnim.value),
+                        blurRadius: 5,
+                      )
+                    ]
+                  : null,
+            ),
+          ),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            'Mise à jour automatique dans ${mins.toString().padLeft(2, '0')}:${secs.toString().padLeft(2, '0')}',
+            _connected
+                ? 'Temps réel · actualisation toutes les ${_pollInterval.inSeconds}s'
+                : 'Connexion en cours...',
             style: const TextStyle(color: _text3, fontSize: 11),
           ),
         ),
         GestureDetector(
-          onTap:
-              _isLoading ? null : () => _executeAcquisition(withPhoto: false),
+          onTap: _isLoading ? null : _manualRefresh,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
-              color: _amber.withOpacity(0.12),
+              color: _amber.withOpacity(0.10),
               borderRadius: BorderRadius.circular(8),
               border: Border.all(color: _amber.withOpacity(0.20)),
             ),
@@ -716,7 +741,7 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // .section-title
+  // Section title
   Widget _sectionTitle(String text) {
     return Text(text.toUpperCase(),
         style: const TextStyle(

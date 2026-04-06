@@ -7,7 +7,7 @@ import '../widgets/sensor_card.dart';
 import '../widgets/actuator_tile.dart';
 import 'alerts_page.dart';
 
-// Design tokens matching HTML mockup
+// Design tokens
 const Color _bg       = Color(0xFF0A0B0F);
 const Color _surface  = Color(0xFF13151C);
 const Color _surface2 = Color(0xFF1C1F2B);
@@ -40,10 +40,10 @@ class _DevDashboardState extends State<DevDashboard>
     'fan': false, 'heater': false, 'pump': false,
   };
 
-  static const Duration _periodicInterval = Duration(seconds: 2);
-  int _secondsUntilNext = 2;
-  Timer? _periodicTimer;
-  Timer? _countdown;
+  // Polling 2 secondes
+  static const Duration _pollInterval = Duration(seconds: 2);
+  Timer? _pollTimer;
+  bool _isFetching = false;
 
   late AnimationController _pulseCtrl;
   late AnimationController _fadeCtrl;
@@ -53,64 +53,96 @@ class _DevDashboardState extends State<DevDashboard>
   @override
   void initState() {
     super.initState();
-    _pulseCtrl = AnimationController(vsync: this, duration: const Duration(seconds: 2))..repeat(reverse: true);
-    _fadeCtrl  = AnimationController(vsync: this, duration: const Duration(milliseconds: 700));
+    _pulseCtrl = AnimationController(
+        vsync: this, duration: const Duration(seconds: 2))
+      ..repeat(reverse: true);
+    _fadeCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 700));
     _pulseAnim = CurvedAnimation(parent: _pulseCtrl, curve: Curves.easeInOut);
     _fadeAnim  = CurvedAnimation(parent: _fadeCtrl,  curve: Curves.easeOut);
     _fadeCtrl.forward();
-    _startPeriodicTimer();
+    _startPolling();
   }
 
   @override
   void dispose() {
-    _periodicTimer?.cancel();
-    _countdown?.cancel();
+    _pollTimer?.cancel();
     _pulseCtrl.dispose();
     _fadeCtrl.dispose();
     super.dispose();
   }
 
-  void _startPeriodicTimer() {
-    _periodicTimer?.cancel();
+  // ── Démarrage du polling ──────────────────────────────────────
+  void _startPolling() {
+    _pollTimer?.cancel();
     _runMode1();
-    _periodicTimer = Timer.periodic(_periodicInterval, (_) => _runMode1());
-    _startCountdown();
+    _pollTimer = Timer.periodic(_pollInterval, (_) => _runMode1());
   }
 
-  void _startCountdown() {
-    _countdown?.cancel();
-    setState(() => _secondsUntilNext = _periodicInterval.inSeconds);
-    _countdown = Timer.periodic(const Duration(seconds: 1), (_) {
-      if (!mounted) return;
-      setState(() => _secondsUntilNext > 0 ? _secondsUntilNext-- : _secondsUntilNext = _periodicInterval.inSeconds);
-    });
-  }
-
+  // ── Fetch + détection de changement ──────────────────────────
   Future<void> _runMode1() async {
-    if (!mounted) return;
-    setState(() => _isLoading = true);
+    if (!mounted || _isFetching) return;
+    _isFetching = true;
+
+    if (_lastUpdate.isEmpty && mounted) {
+  setState(() => _isLoading = true); // OK seulement au 1er chargement réel
+}
+
     try {
       final raw = await UbidotsService.fetchDevData();
-      if (raw.temperature <= 35.0 && raw.humidite <= 80.0) _overrideOff['fan']    = false;
-      if (raw.temperature >= 15.0)                          _overrideOff['heater'] = false;
-      if (raw.niveauEau   >= 20.0)                          _overrideOff['pump']   = false;
-      final data = await UbidotsService.applyAlertsAndSendDev(raw: raw, overrideOff: _overrideOff);
+
+      // Détection de changement — ne pas setState si rien n'a changé
+      final changed =
+          raw.temperature != _data.temperature ||
+          raw.humidite    != _data.humidite    ||
+          raw.niveauEau   != _data.niveauEau   ||
+          raw.fanOn       != _data.fanOn       ||
+          raw.heaterOn    != _data.heaterOn    ||
+          raw.pumpOn      != _data.pumpOn      ||
+          raw.alerteChaud != _data.alerteChaud ||
+          raw.alerteNiveau!= _data.alerteNiveau;
+
+      if (!changed) return;
+
+      // Reset overrides quand les seuils repassent en zone normale
+      if (raw.temperature <= 35.0 && raw.humidite <= 90.0) _overrideOff['fan']    = false;
+      if (raw.temperature >= 5.0)                           _overrideOff['heater'] = false;
+      if (raw.niveauEau   <= 20.0)                          _overrideOff['pump']   = false;
+
+      final data = await UbidotsService.applyAlertsAndSendDev(
+          raw: raw, overrideOff: _overrideOff);
       await AlertService.checkDev(data);
-      if (mounted) setState(() { _data = data; _lastUpdate = _now(); });
-      _startCountdown();
+
+      if (mounted) {
+        setState(() {
+          _data       = data;       // valeur ancienne conservée jusqu'à ce point
+          _lastUpdate = _now();
+          _isLoading  = false;
+        });
+      }
     } catch (_) {
-    } finally {
       if (mounted) setState(() => _isLoading = false);
+    } finally {
+      _isFetching = false;
     }
   }
 
+  // ── Refresh manuel ────────────────────────────────────────────
+  Future<void> _manualRefresh() async {
+  if (_isFetching) return; // ne pas interrompre un fetch actif
+  await _runMode1();
+}
+
+  // ── Demande niveau eau ────────────────────────────────────────
   Future<void> _demandeNiveauEau() async {
     if (_loadingRequeteEau || _loadingRequeteTh) return;
     setState(() => _loadingRequeteEau = true);
     try {
       final updated = await UbidotsService.fetchNiveauEauOnly(_data);
-      if (updated.niveauEau < 20.0 && !_data.pumpOn) {
-        final withAlerts = await UbidotsService.applyAlertsAndSendDev(raw: updated, overrideOff: _overrideOff);
+      if (updated.niveauEau > 20.0 && !_data.pumpOn) {
+        // niveauEau > 20 = réservoir bas → activer pompe
+        final withAlerts = await UbidotsService.applyAlertsAndSendDev(
+            raw: updated, overrideOff: _overrideOff);
         await AlertService.checkDev(withAlerts);
         if (mounted) setState(() { _data = withAlerts; _lastUpdate = _now(); });
       } else {
@@ -122,14 +154,19 @@ class _DevDashboardState extends State<DevDashboard>
     }
   }
 
+  // ── Demande température + humidité ────────────────────────────
   Future<void> _demandeTemperatureHumidite() async {
     if (_loadingRequeteEau || _loadingRequeteTh) return;
     setState(() => _loadingRequeteTh = true);
     try {
       final updated = await UbidotsService.fetchTempHumOnly(_data);
-      final needsMode3 = (updated.temperature > 35.0 || updated.humidite > 90.0 || updated.temperature < 5.0) && (!_data.fanOn && !_data.heaterOn);
+      final needsMode3 =
+          (updated.temperature > 35.0 || updated.humidite > 90.0 ||
+              updated.temperature < 5.0) &&
+          (!_data.fanOn && !_data.heaterOn);
       if (needsMode3) {
-        final withAlerts = await UbidotsService.applyAlertsAndSendDev(raw: updated, overrideOff: _overrideOff);
+        final withAlerts = await UbidotsService.applyAlertsAndSendDev(
+            raw: updated, overrideOff: _overrideOff);
         await AlertService.checkDev(withAlerts);
         if (mounted) setState(() { _data = withAlerts; _lastUpdate = _now(); });
       } else {
@@ -143,29 +180,34 @@ class _DevDashboardState extends State<DevDashboard>
 
   String _now() {
     final n = DateTime.now();
-    return '${n.hour.toString().padLeft(2,'0')}:${n.minute.toString().padLeft(2,'0')}';
+    return '${n.hour.toString().padLeft(2, '0')}:${n.minute.toString().padLeft(2, '0')}:${n.second.toString().padLeft(2, '0')}';
   }
 
+  // niveauEau = distance capteur : grand = peu d'eau = rouge/orange
   Color get _tempColor {
     if (_data.temperature < 15) return _blue;
     if (_data.temperature < 35) return _green;
     return _red;
   }
+
   Color get _waterColor {
-    if (_data.niveauEau < 20) return _red;
-    if (_data.niveauEau < 50) return _amber;
-    return _blue;
+    if (_data.niveauEau > 80) return _red;    // très vide
+    if (_data.niveauEau > 20) return _amber;  // faible → pompe ON
+    return _blue;                              // niveau suffisant
   }
 
-  int get _alertCount  => AlertService.devAlerts.length;
+  int  get _alertCount => AlertService.devAlerts.length;
   bool get _connected  => _lastUpdate.isNotEmpty;
 
+  // ════════════════════════════════════════════════════════════════
+  //  BUILD
+  // ════════════════════════════════════════════════════════════════
   @override
   Widget build(BuildContext context) {
     return FadeTransition(
       opacity: _fadeAnim,
       child: RefreshIndicator(
-        onRefresh: _runMode1,
+        onRefresh: _manualRefresh,
         color: _green,
         backgroundColor: _surface,
         child: CustomScrollView(
@@ -174,18 +216,21 @@ class _DevDashboardState extends State<DevDashboard>
             SliverToBoxAdapter(
               child: Padding(
                 padding: const EdgeInsets.fromLTRB(16, 0, 16, 40),
-                child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-                  const SizedBox(height: 12),
-                  _buildUpdateRow(),
-                  const SizedBox(height: 20),
-                  _buildSensorsSection(),
-                  const SizedBox(height: 20),
-                  _buildActuatorsSection(),
-                  const SizedBox(height: 20),
-                  _buildManualSection(),
-                  const SizedBox(height: 20),
-                  _buildAutoRefreshCard(),
-                ]),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const SizedBox(height: 12),
+                    _buildUpdateRow(),
+                    const SizedBox(height: 20),
+                    _buildSensorsSection(),
+                    const SizedBox(height: 20),
+                    _buildActuatorsSection(),
+                    const SizedBox(height: 20),
+                    _buildManualSection(),
+                    const SizedBox(height: 20),
+                    _buildLiveCard(),
+                  ],
+                ),
               ),
             ),
           ],
@@ -194,7 +239,7 @@ class _DevDashboardState extends State<DevDashboard>
     );
   }
 
-  // .dash-header style appbar
+  // ── AppBar ────────────────────────────────────────────────────
   Widget _buildAppBar() {
     return SliverAppBar(
       pinned: true,
@@ -206,23 +251,27 @@ class _DevDashboardState extends State<DevDashboard>
         Container(
           width: 34, height: 34,
           decoration: BoxDecoration(
-            color: _green.withOpacity(0.12), borderRadius: BorderRadius.circular(11),
+            color: _green.withOpacity(0.12),
+            borderRadius: BorderRadius.circular(11),
           ),
           child: const Center(child: Text('🚜', style: TextStyle(fontSize: 16))),
         ),
         const SizedBox(width: 10),
         const Text('Ferme',
-            style: TextStyle(fontSize: 18, fontWeight: FontWeight.w800, color: _text, letterSpacing: -0.4)),
+            style: TextStyle(
+                fontSize: 18, fontWeight: FontWeight.w800,
+                color: _text, letterSpacing: -0.4)),
         if (_isLoading) ...[
           const SizedBox(width: 10),
-          SizedBox(width: 12, height: 12,
-              child: CircularProgressIndicator(strokeWidth: 2, color: _green.withOpacity(0.6))),
+          SizedBox(
+            width: 12, height: 12,
+            child: CircularProgressIndicator(
+                strokeWidth: 2, color: _green.withOpacity(0.6)),
+          ),
         ],
       ]),
       actions: [
-        // Alert .icon-btn
         _buildAlertBtn(),
-        // Refresh .icon-btn
         Container(
           margin: const EdgeInsets.only(right: 16, top: 10, bottom: 10),
           width: 34, height: 34,
@@ -234,7 +283,7 @@ class _DevDashboardState extends State<DevDashboard>
           child: IconButton(
             padding: EdgeInsets.zero,
             icon: Text('↻', style: TextStyle(color: _text2, fontSize: 16)),
-            onPressed: _isLoading ? null : _runMode1,
+            onPressed: _isLoading ? null : _manualRefresh,
           ),
         ),
       ],
@@ -258,29 +307,38 @@ class _DevDashboardState extends State<DevDashboard>
           ),
           child: IconButton(
             padding: EdgeInsets.zero,
-            icon: Text(_alertCount > 0 ? '🔔' : '🔔',
-                style: TextStyle(fontSize: 15, color: _alertCount > 0 ? _amber : _text3)),
+            icon: Text('🔔',
+                style: TextStyle(
+                    fontSize: 15,
+                    color: _alertCount > 0 ? _amber : _text3)),
             onPressed: () => Navigator.push(context,
-                MaterialPageRoute(builder: (_) => const AlertsPage()))
+                    MaterialPageRoute(builder: (_) => const AlertsPage()))
                 .then((_) => setState(() {})),
           ),
         ),
-        if (_alertCount > 0) Positioned(
-          top: -3, right: -3,
-          child: Container(
-            width: 15, height: 15,
-            decoration: const BoxDecoration(color: _red, shape: BoxShape.circle),
-            child: Center(
-              child: Text(_alertCount > 9 ? '9+' : '$_alertCount',
-                  style: const TextStyle(color: Colors.white, fontSize: 8, fontWeight: FontWeight.w800)),
+        if (_alertCount > 0)
+          Positioned(
+            top: -3, right: -3,
+            child: Container(
+              width: 15, height: 15,
+              decoration:
+                  const BoxDecoration(color: _red, shape: BoxShape.circle),
+              child: Center(
+                child: Text(
+                  _alertCount > 9 ? '9+' : '$_alertCount',
+                  style: const TextStyle(
+                      color: Colors.white,
+                      fontSize: 8,
+                      fontWeight: FontWeight.w800),
+                ),
+              ),
             ),
           ),
-        ),
       ]),
     );
   }
 
-  // .update-row
+  // ── Update row ────────────────────────────────────────────────
   Widget _buildUpdateRow() {
     return Row(children: [
       AnimatedBuilder(
@@ -290,10 +348,11 @@ class _DevDashboardState extends State<DevDashboard>
           decoration: BoxDecoration(
             color: _connected ? _green : _text3,
             shape: BoxShape.circle,
-            boxShadow: _connected ? [BoxShadow(
-              color: _green.withOpacity(0.4 * _pulseAnim.value),
-              blurRadius: 6, spreadRadius: 1,
-            )] : null,
+            boxShadow: _connected
+                ? [BoxShadow(
+                    color: _green.withOpacity(0.4 * _pulseAnim.value),
+                    blurRadius: 6, spreadRadius: 1)]
+                : null,
           ),
         ),
       ),
@@ -306,10 +365,9 @@ class _DevDashboardState extends State<DevDashboard>
       if (_alertCount > 0)
         GestureDetector(
           onTap: () => Navigator.push(context,
-              MaterialPageRoute(builder: (_) => const AlertsPage()))
+                  MaterialPageRoute(builder: (_) => const AlertsPage()))
               .then((_) => setState(() {})),
           child: Container(
-            // .alert-pill
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
               color: _red.withOpacity(0.12),
@@ -318,14 +376,15 @@ class _DevDashboardState extends State<DevDashboard>
             ),
             child: Text(
               '$_alertCount alerte${_alertCount > 1 ? 's' : ''}',
-              style: const TextStyle(color: _red, fontSize: 11, fontWeight: FontWeight.w600),
+              style: const TextStyle(
+                  color: _red, fontSize: 11, fontWeight: FontWeight.w600),
             ),
           ),
         ),
     ]);
   }
 
-  // .section-title + .sensors-grid
+  // ── Sensors ───────────────────────────────────────────────────
   Widget _buildSensorsSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Capteurs'),
@@ -341,34 +400,43 @@ class _DevDashboardState extends State<DevDashboard>
           SensorCard(
             title: 'Température',
             value: '${_data.temperature.toStringAsFixed(1)}°C',
-            icon: _data.temperature < 15 ? Icons.ac_unit_rounded : Icons.thermostat_rounded,
+            icon: _data.temperature < 15
+                ? Icons.ac_unit_rounded
+                : Icons.thermostat_rounded,
             color: _tempColor,
-            subtitle: _data.temperature > 35 ? 'Élevée' : _data.temperature < 15 ? 'Basse' : 'Normale',
+            subtitle: _data.temperature > 35
+                ? 'Élevée'
+                : _data.temperature < 15
+                    ? 'Basse'
+                    : 'Normale',
           ),
           SensorCard(
             title: 'Humidité',
             value: '${_data.humidite.toStringAsFixed(0)}%',
             icon: Icons.water_drop_rounded,
             color: _blue,
-            subtitle: _data.humidite > 80 ? 'Élevée' : 'Normale',
+            subtitle: _data.humidite > 90 ? 'Élevée' : 'Normale',
           ),
           SensorCard(
+            // Afficher 100 - niveauEau pour montrer ce qui reste
             title: 'Réservoir',
-            value: '${100-_data.niveauEau}',
+            value: '${(100 - _data.niveauEau).toStringAsFixed(0)} cm',
             icon: Icons.water_rounded,
             color: _waterColor,
-            subtitle: _data.niveauEau > 20 ? 'Faible' : _data.niveauEau < 15 ? 'Moyen' : 'Suffisant',
+            subtitle: _data.niveauEau > 80
+                ? 'Critique'          // très loin = presque vide
+                : _data.niveauEau > 20
+                    ? 'Faible'        // pompe active
+                    : 'Suffisant',    // niveau correct
           ),
-          _buildTimerCard(),
+          _buildLiveIndicatorCard(),
         ],
       ),
     ]);
   }
 
-  // Timer card (.sc-surface style)
-  Widget _buildTimerCard() {
-    final mins = _secondsUntilNext ~/ 60;
-    final secs = _secondsUntilNext % 60;
+  // ── Live indicator card ───────────────────────────────────────
+  Widget _buildLiveIndicatorCard() {
     return Container(
       decoration: BoxDecoration(
         color: _surface,
@@ -376,29 +444,62 @@ class _DevDashboardState extends State<DevDashboard>
         border: Border.all(color: Colors.white.withOpacity(0.07)),
       ),
       padding: const EdgeInsets.all(16),
-      child: Column(crossAxisAlignment: CrossAxisAlignment.start,
-          mainAxisAlignment: MainAxisAlignment.spaceBetween, children: [
-        Container(
-          padding: const EdgeInsets.all(9),
-          decoration: BoxDecoration(
-            color: Colors.white.withOpacity(0.05), borderRadius: BorderRadius.circular(10),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          AnimatedBuilder(
+            animation: _pulseAnim,
+            builder: (_, __) => Container(
+              padding: const EdgeInsets.all(9),
+              decoration: BoxDecoration(
+                color: (_connected ? _green : _text3)
+                    .withOpacity(0.10 + 0.08 * _pulseAnim.value),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text('📡', style: TextStyle(fontSize: 14)),
+            ),
           ),
-          child: const Text('⏱️', style: TextStyle(fontSize: 14)),
-        ),
-        Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-          Text(
-            '${mins.toString().padLeft(2,'0')}:${secs.toString().padLeft(2,'0')}',
-            style: const TextStyle(fontSize: 26, fontWeight: FontWeight.w800,
-                color: _text2, height: 1, letterSpacing: -0.5),
-          ),
-          const SizedBox(height: 4),
-          const Text('Prochain refresh', style: TextStyle(fontSize: 11, color: _text3)),
-        ]),
-      ]),
+          Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
+            AnimatedBuilder(
+              animation: _pulseAnim,
+              builder: (_, __) => Row(children: [
+                Container(
+                  width: 6, height: 6,
+                  decoration: BoxDecoration(
+                    color: _connected ? _green : _red,
+                    shape: BoxShape.circle,
+                    boxShadow: _connected
+                        ? [BoxShadow(
+                            color: _green.withOpacity(0.5 * _pulseAnim.value),
+                            blurRadius: 5, spreadRadius: 1)]
+                        : null,
+                  ),
+                ),
+                const SizedBox(width: 6),
+                Text(
+                  _connected ? 'En direct' : 'Hors ligne',
+                  style: TextStyle(
+                    fontSize: 14,
+                    fontWeight: FontWeight.w800,
+                    color: _connected ? _green : _red,
+                    letterSpacing: -0.3,
+                  ),
+                ),
+              ]),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              'Refresh · ${_pollInterval.inSeconds}s',
+              style: const TextStyle(fontSize: 11, color: _text3),
+            ),
+          ]),
+        ],
+      ),
     );
   }
 
-  // .section-title + .actuators-list
+  // ── Actuators ─────────────────────────────────────────────────
   Widget _buildActuatorsSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       Row(children: [
@@ -408,23 +509,37 @@ class _DevDashboardState extends State<DevDashboard>
           Container(
             padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
             decoration: BoxDecoration(
-              color: _green.withOpacity(0.10), borderRadius: BorderRadius.circular(20),
+              color: _green.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(20),
             ),
             child: const Text('En cours',
-                style: TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w600)),
+                style: TextStyle(
+                    color: _green, fontSize: 11, fontWeight: FontWeight.w600)),
           ),
       ]),
       const SizedBox(height: 10),
-      ActuatorTile(title: 'Ventilateur', autoReason: 'Température élevée',
-          icon: Icons.air_rounded, value: _data.fanOn, activeColor: _green),
-      ActuatorTile(title: 'Chauffage', autoReason: 'En veille',
-          icon: Icons.local_fire_department_rounded, value: _data.heaterOn, activeColor: _amber),
-      ActuatorTile(title: 'Pompe à eau', autoReason: 'Réservoir faible',
-          icon: Icons.water_damage_rounded, value: _data.pumpOn, activeColor: _blue),
+      ActuatorTile(
+          title: 'Ventilateur',
+          autoReason: _data.fanOn ? 'Température/Humidité élevée' : 'En veille',
+          icon: Icons.air_rounded,
+          value: _data.fanOn,
+          activeColor: _green),
+      ActuatorTile(
+          title: 'Chauffage',
+          autoReason: _data.heaterOn ? 'Température basse' : 'En veille',
+          icon: Icons.local_fire_department_rounded,
+          value: _data.heaterOn,
+          activeColor: _amber),
+      ActuatorTile(
+          title: 'Pompe à eau',
+          autoReason: _data.pumpOn ? 'Réservoir faible' : 'Niveau suffisant',
+          icon: Icons.water_damage_rounded,
+          value: _data.pumpOn,
+          activeColor: _blue),
     ]);
   }
 
-  // .section-title + .manual-btns
+  // ── Manual section ────────────────────────────────────────────
   Widget _buildManualSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Lecture manuelle'),
@@ -433,7 +548,7 @@ class _DevDashboardState extends State<DevDashboard>
         isLoading: _loadingRequeteEau,
         emoji: '🪣',
         title: 'Vérifier le niveau d\'eau',
-        currentVal: '${100- _data.niveauEau}',
+        currentVal: '${(100 - _data.niveauEau).toStringAsFixed(0)} cm',
         color: _blue,
         onTap: _demandeNiveauEau,
       ),
@@ -442,14 +557,14 @@ class _DevDashboardState extends State<DevDashboard>
         isLoading: _loadingRequeteTh,
         emoji: '🌡️',
         title: 'Vérifier temp. & humidité',
-        currentVal: '${_data.temperature.toStringAsFixed(1)}°C · ${_data.humidite.toStringAsFixed(0)}%',
+        currentVal:
+            '${_data.temperature.toStringAsFixed(1)}°C · ${_data.humidite.toStringAsFixed(0)}%',
         color: _amber,
         onTap: _demandeTemperatureHumidite,
       ),
     ]);
   }
 
-  // .man-btn
   Widget _manualBtn({
     required bool isLoading,
     required String emoji,
@@ -467,40 +582,53 @@ class _DevDashboardState extends State<DevDashboard>
           color: isLoading ? color.withOpacity(0.08) : _surface,
           borderRadius: BorderRadius.circular(16),
           border: Border.all(
-            color: isLoading ? color.withOpacity(0.22) : Colors.white.withOpacity(0.10),
+            color: isLoading
+                ? color.withOpacity(0.22)
+                : Colors.white.withOpacity(0.10),
           ),
         ),
         child: Row(children: [
           Container(
-            // .man-icon
             width: 40, height: 40,
             decoration: BoxDecoration(
-              color: color.withOpacity(0.10), borderRadius: BorderRadius.circular(12),
+              color: color.withOpacity(0.10),
+              borderRadius: BorderRadius.circular(12),
             ),
             child: isLoading
-                ? Padding(padding: const EdgeInsets.all(11),
-                    child: CircularProgressIndicator(strokeWidth: 2, color: color))
-                : Center(child: Text(emoji, style: const TextStyle(fontSize: 18))),
+                ? Padding(
+                    padding: const EdgeInsets.all(11),
+                    child: CircularProgressIndicator(
+                        strokeWidth: 2, color: color))
+                : Center(
+                    child: Text(emoji, style: const TextStyle(fontSize: 18))),
           ),
           const SizedBox(width: 12),
-          Expanded(child: Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
-            Text(title, style: const TextStyle(color: _text, fontSize: 12, fontWeight: FontWeight.w700)),
-            const SizedBox(height: 2),
-            Text(
-              isLoading ? 'Mise à jour...' : currentVal,
-              style: TextStyle(color: isLoading ? color : _text2, fontSize: 11),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Text(title,
+                    style: const TextStyle(
+                        color: _text, fontSize: 12, fontWeight: FontWeight.w700)),
+                const SizedBox(height: 2),
+                Text(
+                  isLoading ? 'Mise à jour...' : currentVal,
+                  style: TextStyle(
+                      color: isLoading ? color : _text2, fontSize: 11),
+                ),
+              ],
             ),
-          ])),
-          Text('›', style: TextStyle(color: _text3, fontSize: 18, fontWeight: FontWeight.w400)),
+          ),
+          Text('›',
+              style: TextStyle(
+                  color: _text3, fontSize: 18, fontWeight: FontWeight.w400)),
         ]),
       ),
     );
   }
 
-  // .refresh-card
-  Widget _buildAutoRefreshCard() {
-    final mins = _secondsUntilNext ~/ 60;
-    final secs = _secondsUntilNext % 60;
+  // ── Live status card ──────────────────────────────────────────
+  Widget _buildLiveCard() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
       decoration: BoxDecoration(
@@ -509,16 +637,32 @@ class _DevDashboardState extends State<DevDashboard>
         border: Border.all(color: Colors.white.withOpacity(0.07)),
       ),
       child: Row(children: [
-        const Text('⏱️', style: TextStyle(fontSize: 14)),
+        AnimatedBuilder(
+          animation: _pulseAnim,
+          builder: (_, __) => Container(
+            width: 7, height: 7,
+            decoration: BoxDecoration(
+              color: _connected ? _green : _red,
+              shape: BoxShape.circle,
+              boxShadow: _connected
+                  ? [BoxShadow(
+                      color: _green.withOpacity(0.5 * _pulseAnim.value),
+                      blurRadius: 5)]
+                  : null,
+            ),
+          ),
+        ),
         const SizedBox(width: 10),
         Expanded(
           child: Text(
-            'Mise à jour automatique dans ${mins.toString().padLeft(2,'0')}:${secs.toString().padLeft(2,'0')}',
+            _connected
+                ? 'Temps réel · actualisation toutes les ${_pollInterval.inSeconds}s'
+                : 'Connexion en cours...',
             style: const TextStyle(color: _text3, fontSize: 11),
           ),
         ),
         GestureDetector(
-          onTap: _isLoading ? null : _runMode1,
+          onTap: _isLoading ? null : _manualRefresh,
           child: Container(
             padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
             decoration: BoxDecoration(
@@ -527,16 +671,21 @@ class _DevDashboardState extends State<DevDashboard>
               border: Border.all(color: _green.withOpacity(0.20)),
             ),
             child: const Text('Actualiser',
-                style: TextStyle(color: _green, fontSize: 11, fontWeight: FontWeight.w600)),
+                style: TextStyle(
+                    color: _green, fontSize: 11, fontWeight: FontWeight.w600)),
           ),
         ),
       ]),
     );
   }
 
-  // .section-title
+  // ── Section title ─────────────────────────────────────────────
   Widget _sectionTitle(String text) {
     return Text(text.toUpperCase(),
-        style: const TextStyle(color: _text2, fontSize: 10, fontWeight: FontWeight.w700, letterSpacing: 0.5));
+        style: const TextStyle(
+            color: _text2,
+            fontSize: 10,
+            fontWeight: FontWeight.w700,
+            letterSpacing: 0.5));
   }
 }

@@ -11,6 +11,9 @@ class UbidotsService {
   static const String devLabel = 'esp32-cam';
   static const String camLabel = 'esp-cam';
 
+  //static const String devLabel = 'esp32-dev';
+  //static const String camLabel = 'esp32-cam';
+
   // ── Headers séparés ──
   static Map<String, String> get _headers => {
         'X-Auth-Token': token,
@@ -144,9 +147,9 @@ class UbidotsService {
   }) async {
     final fanShouldOn = raw.temperature > 35.0 || raw.humidite > 90.0;
     final heaterShouldOn = raw.temperature < 5.0;
-    final pumpShouldOn = raw.niveauEau > 80.0;
+    final pumpShouldOn = raw.niveauEau > 20.0;
     final alerteChaud = raw.temperature > 35.0;
-    final alerteNiveau = raw.niveauEau < 20.0;
+    final alerteNiveau = raw.niveauEau > 20.0;
 
     final fanOn = overrideOff['fan']! ? false : fanShouldOn;
     final heaterOn = overrideOff['heater']! ? false : heaterShouldOn;
@@ -250,23 +253,38 @@ class UbidotsService {
   }
 
   static Future<CamData> applyAlertsAndSendCam({
-    required CamData raw,
-    required bool alarmeOverrideOff,
-  }) async {
-    if (alarmeOverrideOff && raw.mouvement) {
-      await _sendValue(camLabel, 'stop_alarme', 1); // ✅ tokenCam auto
-      await _delay();
-      await _sendValue(camLabel, 'mouvement', 0); // ✅ tokenCam auto
+  required CamData raw,
+  required bool alarmeOverrideOff,
+}) async {
+  // mouvement=0 → reset stop_alarme à 0 automatiquement
+  if (!raw.mouvement) {
+    if (raw.stopAlarme) {
+      await _sendValue(camLabel, 'stop_alarme', 0);
       await _delay();
     }
     return CamData(
-      mouvement: alarmeOverrideOff ? false : raw.mouvement,
-      stopAlarme: alarmeOverrideOff,
+      mouvement: false,
+      stopAlarme: false,
       demandePhoto: raw.demandePhoto,
       lastPhotoUrl: raw.lastPhotoUrl,
       connected: true,
     );
   }
+
+  // mouvement=1 + user a appuyé Stop → envoie stop_alarme=1
+  if (alarmeOverrideOff && !raw.stopAlarme) {
+    await _sendValue(camLabel, 'stop_alarme', 1);
+    await _delay();
+  }
+
+  return CamData(
+    mouvement: raw.mouvement,
+    stopAlarme: alarmeOverrideOff,
+    demandePhoto: raw.demandePhoto,
+    lastPhotoUrl: raw.lastPhotoUrl,
+    connected: true,
+  );
+}
 
   static Future<bool> sendDemandePhoto() async {
     final ok =
@@ -280,6 +298,10 @@ class UbidotsService {
 
   static Future<bool> sendStopAlarme() =>
       _sendValue(camLabel, 'stop_alarme', 1); // ✅ tokenCam auto
+  
+  static Future<bool> resetStopAlarme() =>
+      _sendValue(camLabel, 'stop_alarme', 0);
+
 
   static Future<void> _delay([int ms = 400]) =>
       Future.delayed(Duration(milliseconds: ms));
