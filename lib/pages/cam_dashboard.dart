@@ -31,6 +31,8 @@ class _CamDashboardState extends State<CamDashboard>
   bool _loadingStop = false;
   String _lastUpdate = '';
   bool _alarmeOverrideOff = false;
+  Timer? _alarmeAutoHideTimer;
+  bool _alarmeButtonHidden = false;
 
   static const Duration _pollInterval = Duration(seconds: 2);
   Timer? _pollTimer;
@@ -67,6 +69,7 @@ class _CamDashboardState extends State<CamDashboard>
     _pulseCtrl.dispose();
     _fadeCtrl.dispose();
     _motionCtrl.dispose();
+    _alarmeAutoHideTimer?.cancel();
     super.dispose();
   }
 
@@ -106,8 +109,17 @@ class _CamDashboardState extends State<CamDashboard>
           finalRaw.connected != _data.connected ||
           photoChanged; // ✅ Ajouté ici
 
-      if (!finalRaw.mouvement) _alarmeOverrideOff = false;
-
+      if (!finalRaw.mouvement) {
+       _alarmeOverrideOff = false;
+       _alarmeAutoHideTimer?.cancel();
+       _alarmeAutoHideTimer = null;
+       _alarmeButtonHidden = false;
+     } else if (_alarmeAutoHideTimer == null) {
+       // Mouvement détecté → démarrer le timer automatiquement
+     _alarmeAutoHideTimer = Timer(const Duration(seconds: 10), () {
+      if (mounted) setState(() => _alarmeButtonHidden = true);
+      });
+   }
       final data = await UbidotsService.applyAlertsAndSendCam(
         raw: finalRaw,
         alarmeOverrideOff: _alarmeOverrideOff,
@@ -192,15 +204,18 @@ class _CamDashboardState extends State<CamDashboard>
   }
 
   Future<void> _stopAlarme() async {
-    if (_loadingStop) return;
-    setState(() => _loadingStop = true);
-    try {
-      _alarmeOverrideOff = true;
-      await _runPolling();
-    } finally {
-      if (mounted) setState(() => _loadingStop = false);
-    }
+  if (_loadingStop) return;
+  // Utilisateur a cliqué → annuler le timer auto-hide
+  _alarmeAutoHideTimer?.cancel();
+  _alarmeAutoHideTimer = null;
+  setState(() => _loadingStop = true);
+  try {
+    _alarmeOverrideOff = true;
+    await _runPolling();
+  } finally {
+    if (mounted) setState(() => _loadingStop = false);
   }
+}
 
   String _now() {
     final n = DateTime.now();
@@ -233,9 +248,9 @@ class _CamDashboardState extends State<CamDashboard>
                     _buildDetectionSection(),
                     const SizedBox(height: 20),
                     _buildPhotoSection(),
-                    if (_alarmeActive) ...[
-                      const SizedBox(height: 20),
-                      _buildAlarmSection(),
+                    if (_alarmeActive && !_alarmeButtonHidden) ...[
+                        const SizedBox(height: 20),
+                         _buildAlarmSection(),
                     ],
                     const SizedBox(height: 20),
                     _buildLiveCard(),
@@ -459,7 +474,7 @@ class _CamDashboardState extends State<CamDashboard>
                       : 'Aucun mouvement — surveillance active',
                   style: TextStyle(color: _text3, fontSize: 11, height: 1.4),
                 ),
-                if (detected) ...[
+                if (detected && !_alarmeButtonHidden) ...[
                   const SizedBox(height: 8),
                   Container(
                     padding:
