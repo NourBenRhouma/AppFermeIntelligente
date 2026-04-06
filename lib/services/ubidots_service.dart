@@ -69,32 +69,33 @@ class UbidotsService {
   // ═══════════════════════════════════════════════════════════════
 
   static Future<DevData> fetchDevData() async {
-    final r = await Future.wait([
-      _fetchValue(devLabel, 'temperature'),
-      _fetchValue(devLabel, 'humidite'),
-      _fetchValue(devLabel, 'niveau_eau'),
-      _fetchValue(devLabel, 'fan'),
-      _fetchValue(devLabel, 'heater'),
-      _fetchValue(devLabel, 'pump'),
-      _fetchValue(devLabel, 'alerte_chaud'),
-      _fetchValue(devLabel, 'alerte_niveau'),
-      _fetchValue(devLabel, 'switch_requete'),
-      _fetchValue(devLabel, 'switch_requete_th'),
-    ]);
-    return DevData(
-      temperature: r[0],
-      humidite: r[1],
-      niveauEau: r[2],
-      fanOn: r[3] >= 0.5,
-      heaterOn: r[4] >= 0.5,
-      pumpOn: r[5] >= 0.5,
-      alerteChaud: r[6] >= 0.5,
-      alerteNiveau: r[7] >= 0.5,
-      switchRequete: r[8] >= 0.5,
-      switchRequeteTh: r[9] >= 0.5,
-      connected: true,
-    );
-  }
+  final r = await Future.wait([
+    _fetchValue(devLabel, 'temperature'),
+    _fetchValue(devLabel, 'humidite'),
+    _fetchValue(devLabel, 'niveau_eau'),
+  ]);
+
+  final temp = r[0];
+  final hum  = r[1];
+  final eau  = r[2];
+
+  // Calcul local basé sur les capteurs
+  final fanOn    = temp > 35.0 || hum > 90.0;
+  final heaterOn = temp < 5.0;
+  final pumpOn   = eau > 20.0;
+
+  return DevData(
+    temperature: temp,
+    humidite:    hum,
+    niveauEau:   eau,
+    fanOn:       fanOn,
+    heaterOn:    heaterOn,
+    pumpOn:      pumpOn,
+    alerteChaud:  temp > 35.0,
+    alerteNiveau: eau > 20.0,
+    connected: true,
+  );
+}
 
   static Future<DevData> fetchNiveauEauOnly(DevData current) async {
     await _sendValue(devLabel, 'switch_requete', 1);
@@ -142,54 +143,39 @@ class UbidotsService {
   }
 
   static Future<DevData> applyAlertsAndSendDev({
-    required DevData raw,
-    required Map<String, bool> overrideOff,
-  }) async {
-    final fanShouldOn = raw.temperature > 35.0 || raw.humidite > 90.0;
-    final heaterShouldOn = raw.temperature < 5.0;
-    final pumpShouldOn = raw.niveauEau > 20.0;
-    final alerteChaud = raw.temperature > 35.0;
-    final alerteNiveau = raw.niveauEau > 20.0;
+  required DevData raw,
+  required Map<String, bool> overrideOff,
+}) async {
+  final fanOn    = raw.temperature > 35.0 || raw.humidite > 90.0;
+  final heaterOn = raw.temperature < 5.0;
+  final pumpOn   = raw.niveauEau > 20.0;
+  final alerteChaud  = raw.temperature > 35.0;
+  final alerteNiveau = raw.niveauEau > 20.0;
 
-    final fanOn = overrideOff['fan']! ? false : fanShouldOn;
-    final heaterOn = overrideOff['heater']! ? false : heaterShouldOn;
-    final pumpOn = overrideOff['pump']! ? false : pumpShouldOn;
-
-    if (fanOn != raw.fanOn) {
-      await _sendValue(devLabel, 'fan', fanOn ? 1 : 0);
-      await _delay();
-    }
-    if (heaterOn != raw.heaterOn) {
-      await _sendValue(devLabel, 'heater', heaterOn ? 1 : 0);
-      await _delay();
-    }
-    if (pumpOn != raw.pumpOn) {
-      await _sendValue(devLabel, 'pump', pumpOn ? 1 : 0);
-      await _delay();
-    }
-    if (alerteChaud != raw.alerteChaud) {
-      await _sendValue(devLabel, 'alerte_chaud', alerteChaud ? 1 : 0);
-      await _delay();
-    }
-    if (alerteNiveau != raw.alerteNiveau) {
-      await _sendValue(devLabel, 'alerte_niveau', alerteNiveau ? 1 : 0);
-      await _delay();
-    }
-
-    return DevData(
-      temperature: raw.temperature,
-      humidite: raw.humidite,
-      niveauEau: raw.niveauEau,
-      fanOn: fanOn,
-      heaterOn: heaterOn,
-      pumpOn: pumpOn,
-      alerteChaud: alerteChaud,
-      alerteNiveau: alerteNiveau,
-      switchRequete: raw.switchRequete,
-      switchRequeteTh: raw.switchRequeteTh,
-      connected: true,
-    );
+  // Envoyer uniquement les alertes Ubidots si changement
+  if (alerteChaud != raw.alerteChaud) {
+    await _sendValue(devLabel, 'alerte_chaud', alerteChaud ? 1 : 0);
+    await _delay();
   }
+  if (alerteNiveau != raw.alerteNiveau) {
+    await _sendValue(devLabel, 'alerte_niveau', alerteNiveau ? 1 : 0);
+    await _delay();
+  }
+
+  return DevData(
+    temperature: raw.temperature,
+    humidite:    raw.humidite,
+    niveauEau:   raw.niveauEau,
+    fanOn:       fanOn,
+    heaterOn:    heaterOn,
+    pumpOn:      pumpOn,
+    alerteChaud:  alerteChaud,
+    alerteNiveau: alerteNiveau,
+    switchRequete:   raw.switchRequete,
+    switchRequeteTh: raw.switchRequeteTh,
+    connected: true,
+  );
+}
 
   static Future<bool> setFan(int v) => _sendValue(devLabel, 'fan', v);
   static Future<bool> setHeater(int v) => _sendValue(devLabel, 'heater', v);
