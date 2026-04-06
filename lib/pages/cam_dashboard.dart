@@ -6,7 +6,6 @@ import '../services/alert_service.dart';
 import '../widgets/actuator_tile.dart';
 import 'alerts_page.dart';
 
-// Design tokens matching HTML mockup
 const Color _bg = Color(0xFF0A0B0F);
 const Color _surface = Color(0xFF13151C);
 const Color _surface2 = Color(0xFF1C1F2B);
@@ -33,7 +32,6 @@ class _CamDashboardState extends State<CamDashboard>
   String _lastUpdate = '';
   bool _alarmeOverrideOff = false;
 
-  // Polling 2 secondes comme DevDashboard
   static const Duration _pollInterval = Duration(seconds: 2);
   Timer? _pollTimer;
   bool _isFetching = false;
@@ -72,76 +70,79 @@ class _CamDashboardState extends State<CamDashboard>
     super.dispose();
   }
 
-  // ── Démarrage du polling ──────────────────────────────────────
   void _startPolling() {
     _pollTimer?.cancel();
     _runPolling();
     _pollTimer = Timer.periodic(_pollInterval, (_) => _runPolling());
   }
 
-  // ── Fetch + détection de changement ──────────────────────────
- Future<void> _runPolling() async {
-  if (!mounted || _isFetching) return;
-  _isFetching = true;
+  Future<void> _runPolling() async {
+    if (!mounted || _isFetching) return;
+    _isFetching = true;
 
-  if (_lastUpdate.isEmpty && mounted) {
-    setState(() => _isLoading = true);
+    if (_lastUpdate.isEmpty && mounted) {
+      setState(() => _isLoading = true);
+    }
+
+    try {
+      // Lire les données de base sans photo
+      final raw = await UbidotsService.fetchCamData(withPhoto: false);
+
+      // Si mouvement détecté, récupérer aussi la photo
+      CamData finalRaw = raw;
+      if (raw.mouvement) {
+        print('📸 Mouvement détecté, récupération de la photo...');
+        finalRaw = await UbidotsService.fetchCamData(withPhoto: true);
+      }
+
+      // ✅ FIX PRINCIPAL : détecter changement d'URL photo
+      final newPhotoUrl = finalRaw.lastPhotoUrl;
+      final photoChanged = newPhotoUrl != null &&
+          newPhotoUrl.isNotEmpty &&
+          newPhotoUrl != _savedPhotoUrl;
+
+      final changed = finalRaw.mouvement != _data.mouvement ||
+          finalRaw.stopAlarme != _data.stopAlarme ||
+          finalRaw.connected != _data.connected ||
+          photoChanged; // ✅ Ajouté ici
+
+      if (!finalRaw.mouvement) _alarmeOverrideOff = false;
+
+      final data = await UbidotsService.applyAlertsAndSendCam(
+        raw: finalRaw,
+        alarmeOverrideOff: _alarmeOverrideOff,
+      );
+      await AlertService.checkCam(data);
+
+      // ✅ FIX : Toujours sauvegarder la nouvelle URL si elle existe
+      if (photoChanged) {
+        _savedPhotoUrl = newPhotoUrl;
+        print('🖼️ Nouvelle photo sauvegardée: $_savedPhotoUrl');
+      }
+
+      final finalData = CamData(
+        mouvement: data.mouvement,
+        stopAlarme: data.stopAlarme,
+        demandePhoto: data.demandePhoto,
+        lastPhotoUrl: _savedPhotoUrl,
+        connected: data.connected,
+      );
+
+      if (mounted && (changed || _lastUpdate.isEmpty)) {
+        setState(() {
+          _data = finalData;
+          _lastUpdate = _now();
+          _isLoading = false;
+        });
+      }
+    } catch (e) {
+      print('_runPolling erreur: $e');
+      if (mounted) setState(() => _isLoading = false);
+    } finally {
+      _isFetching = false;
+    }
   }
 
-  try {
-    // 🔥 CORRECTION : Lire d'abord les données sans photo
-    final raw = await UbidotsService.fetchCamData(withPhoto: false);
-    
-    // 🔥 Si mouvement détecté, on rappelle pour avoir la photo
-    CamData finalRaw = raw;
-    if (raw.mouvement && _savedPhotoUrl == null) {
-      print('📸 Mouvement détecté, récupération de la photo...');
-      finalRaw = await UbidotsService.fetchCamData(withPhoto: true);
-    }
-
-    // Détection de changement
-    final changed = finalRaw.mouvement != _data.mouvement ||
-        finalRaw.stopAlarme != _data.stopAlarme ||
-        finalRaw.connected != _data.connected;
-
-    // Reset override si plus de mouvement
-    if (!finalRaw.mouvement) _alarmeOverrideOff = false;
-
-    final data = await UbidotsService.applyAlertsAndSendCam(
-      raw: finalRaw,
-      alarmeOverrideOff: _alarmeOverrideOff,
-    );
-    await AlertService.checkCam(data);
-
-    // Sauvegarder la photo si elle existe
-    if (finalRaw.lastPhotoUrl != null) {
-      _savedPhotoUrl = finalRaw.lastPhotoUrl;
-    }
-
-    final finalData = CamData(
-      mouvement: data.mouvement,
-      stopAlarme: data.stopAlarme,
-      demandePhoto: data.demandePhoto,
-      lastPhotoUrl: _savedPhotoUrl,
-      connected: data.connected,
-    );
-
-    if (mounted && (changed || _lastUpdate.isEmpty)) {
-      setState(() {
-        _data = finalData;
-        _lastUpdate = _now();
-        _isLoading = false;
-      });
-    }
-  } catch (e) {
-    print('_runPolling erreur: $e');
-    if (mounted) setState(() => _isLoading = false);
-  } finally {
-    _isFetching = false;
-  }
-}
-
-  // ── Refresh manuel ────────────────────────────────────────────
   Future<void> _manualRefresh() async {
     if (_isFetching) return;
     await _runPolling();
@@ -153,23 +154,26 @@ class _CamDashboardState extends State<CamDashboard>
     try {
       await UbidotsService.sendDemandePhoto();
 
-      // 15 secondes pour laisser ESP32 capturer + upload + envoyer
       await Future.delayed(const Duration(seconds: 15));
 
       final raw = await UbidotsService.fetchCamData(withPhoto: true);
-      
-      // Reset override si plus de mouvement
+
       if (!raw.mouvement) _alarmeOverrideOff = false;
-      
+
       final data = await UbidotsService.applyAlertsAndSendCam(
         raw: raw,
         alarmeOverrideOff: _alarmeOverrideOff,
       );
       await AlertService.checkCam(data);
 
+      // ✅ FIX : Toujours mettre à jour après demande manuelle
+      final newUrl = raw.lastPhotoUrl;
+      if (newUrl != null && newUrl.isNotEmpty) {
+        _savedPhotoUrl = newUrl;
+      }
+
       if (mounted) {
         setState(() {
-          _savedPhotoUrl = raw.lastPhotoUrl ?? _savedPhotoUrl;
           _data = CamData(
             mouvement: data.mouvement,
             stopAlarme: data.stopAlarme,
@@ -243,7 +247,6 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // AppBar
   Widget _buildAppBar() {
     return SliverAppBar(
       pinned: true,
@@ -332,10 +335,7 @@ class _CamDashboardState extends State<CamDashboard>
             child: Container(
               width: 15,
               height: 15,
-              decoration: BoxDecoration(
-                color: _amber,
-                shape: BoxShape.circle,
-              ),
+              decoration: BoxDecoration(color: _amber, shape: BoxShape.circle),
               child: Center(
                   child: Text(_alertCount > 9 ? '9+' : '$_alertCount',
                       style: const TextStyle(
@@ -348,7 +348,6 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // Update row
   Widget _buildUpdateRow() {
     return Row(children: [
       AnimatedBuilder(
@@ -362,10 +361,9 @@ class _CamDashboardState extends State<CamDashboard>
             boxShadow: _connected
                 ? [
                     BoxShadow(
-                      color: _green.withOpacity(0.4 * _pulseAnim.value),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    )
+                        color: _green.withOpacity(0.4 * _pulseAnim.value),
+                        blurRadius: 6,
+                        spreadRadius: 1)
                   ]
                 : null,
           ),
@@ -389,17 +387,14 @@ class _CamDashboardState extends State<CamDashboard>
               borderRadius: BorderRadius.circular(20),
               border: Border.all(color: _amber.withOpacity(0.20)),
             ),
-            child: Text(
-              '$_alertCount alerte${_alertCount > 1 ? 's' : ''}',
-              style: const TextStyle(
-                  color: _amber, fontSize: 11, fontWeight: FontWeight.w600),
-            ),
+            child: Text('$_alertCount alerte${_alertCount > 1 ? 's' : ''}',
+                style: const TextStyle(
+                    color: _amber, fontSize: 11, fontWeight: FontWeight.w600)),
           ),
         ),
     ]);
   }
 
-  // Detection section
   Widget _buildDetectionSection() {
     final detected = _data.mouvement;
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
@@ -439,10 +434,8 @@ class _CamDashboardState extends State<CamDashboard>
                     shape: BoxShape.circle,
                   ),
                   child: Center(
-                    child: Text(
-                      detected ? '🚨' : '🛡️',
-                      style: const TextStyle(fontSize: 26),
-                    ),
+                    child: Text(detected ? '🚨' : '🛡️',
+                        style: const TextStyle(fontSize: 26)),
                   ),
                 ),
               );
@@ -453,15 +446,12 @@ class _CamDashboardState extends State<CamDashboard>
               child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: [
-                Text(
-                  detected ? 'Mouvement détecté' : 'Zone sécurisée',
-                  style: TextStyle(
-                    color: detected ? _red : _green,
-                    fontSize: 15,
-                    fontWeight: FontWeight.w800,
-                    letterSpacing: -0.2,
-                  ),
-                ),
+                Text(detected ? 'Mouvement détecté' : 'Zone sécurisée',
+                    style: TextStyle(
+                        color: detected ? _red : _green,
+                        fontSize: 15,
+                        fontWeight: FontWeight.w800,
+                        letterSpacing: -0.2)),
                 const SizedBox(height: 3),
                 Text(
                   detected
@@ -490,9 +480,9 @@ class _CamDashboardState extends State<CamDashboard>
                             shape: BoxShape.circle,
                             boxShadow: [
                               BoxShadow(
-                                color: _red.withOpacity(0.6 * _pulseAnim.value),
-                                blurRadius: 4,
-                              )
+                                  color:
+                                      _red.withOpacity(0.6 * _pulseAnim.value),
+                                  blurRadius: 4)
                             ],
                           ),
                         ),
@@ -512,7 +502,6 @@ class _CamDashboardState extends State<CamDashboard>
     ]);
   }
 
-  // Photo section
   Widget _buildPhotoSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Photo'),
@@ -529,6 +518,7 @@ class _CamDashboardState extends State<CamDashboard>
             child: _data.lastPhotoUrl != null
                 ? Image.network(
                     _data.lastPhotoUrl!,
+                    // ✅ ValueKey force le rechargement quand l'URL change
                     key: ValueKey(_data.lastPhotoUrl),
                     height: 160,
                     width: double.infinity,
@@ -612,7 +602,6 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // Alarm section
   Widget _buildAlarmSection() {
     return Column(crossAxisAlignment: CrossAxisAlignment.start, children: [
       _sectionTitle('Alarme'),
@@ -685,7 +674,6 @@ class _CamDashboardState extends State<CamDashboard>
     ]);
   }
 
-  // Live card (remplace auto-refresh card)
   Widget _buildLiveCard() {
     return Container(
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 13),
@@ -706,9 +694,8 @@ class _CamDashboardState extends State<CamDashboard>
               boxShadow: _connected
                   ? [
                       BoxShadow(
-                        color: _green.withOpacity(0.5 * _pulseAnim.value),
-                        blurRadius: 5,
-                      )
+                          color: _green.withOpacity(0.5 * _pulseAnim.value),
+                          blurRadius: 5)
                     ]
                   : null,
             ),
@@ -741,7 +728,6 @@ class _CamDashboardState extends State<CamDashboard>
     );
   }
 
-  // Section title
   Widget _sectionTitle(String text) {
     return Text(text.toUpperCase(),
         style: const TextStyle(
